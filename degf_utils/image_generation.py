@@ -3,7 +3,7 @@ from diffusers import StableDiffusionPipeline, DPMSolverMultistepScheduler, Diff
 
 def get_image_generation_pipeline():
     # pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-1", torch_dtype=torch.float16)
-    pipe = StableDiffusionPipeline.from_pretrained("/home/ciram25-liurp/models", torch_dtype=torch.float16)
+    pipe = StableDiffusionPipeline.from_pretrained("/home/ciram25-liurp/models/stable-diffusion-v1-5", torch_dtype=torch.float16)
     # pipe = StableDiffusionPipeline.from_pretrained("stabilityai/stable-diffusion-2-1", torch_dtype=torch.float16)
     # pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config)
     # pipe = DiffusionPipeline.from_pretrained("stabilityai/stable-diffusion-xl-base-0.9", torch_dtype=torch.float16, use_safetensors=True, variant="fp16")

@@ -40,6 +40,18 @@ We provide the code for evaluating our DeGF on POPE, CHAIR, and MME-Hallucinatio
 - CHAIR:`bash eval_bench/scripts/chair_eval.sh`
 - MME:`bash experiments/cd_scripts/mme_eval.sh`
 
+### Qwen-VL + MS-COCO (POPE/CHAIR)
+
+We add Qwen-VL baseline evaluation scripts for MS-COCO. Set your model and data paths in the scripts below, then run:
+
+- POPE (COCO): `bash eval_bench/scripts/pope_eval_qwen-vl.sh`
+- CHAIR (COCO): `bash eval_bench/scripts/chair_eval_qwen-vl.sh`
+
+Notes:
+
+- The Qwen-VL scripts currently run **baseline generation only**. DeGF variants (RITUAL/VCD/M3ID/Diffusion) are not implemented for Qwen-VL in this repo.
+- Make sure COCO is available at `coco/val2014` and `coco/annotations/instances_val2014.json`, and POPE files at `POPE/coco`.
+
 ## 🙏Acknowledgements
 
 Our codebase is adapted from  [RITUAL](https://github.com/sangminwoo/RITUAL), [VCD](https://github.com/DAMO-NLP-SG/VCD), [OPERA](https://github.com/shikiw/OPERA), and [LLaVA](https://github.com/haotian-liu/LLaVA). We thank the authors for releasing their code!
