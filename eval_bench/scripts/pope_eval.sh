@@ -2,7 +2,7 @@
 
 seed=42
 dataset_name="coco" # coco | aokvqa | gqa
-type="adversarial" # random | popular | adversarial
+type="popular" # random | popular | adversarial
 
 
 # llava | instructblip | qwen-vl
@@ -53,10 +53,6 @@ experiment_index=3
 #####################################
 # Run single experiment
 #####################################
-if [ "${model}" = "qwen-vl" ]; then
-	use_diffusion=False
-fi
-
 export CUDA_VISIBLE_DEVICES=2
 master_port=$(python3 - <<'PY'
 import socket
