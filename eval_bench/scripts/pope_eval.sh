@@ -43,7 +43,7 @@ use_ritual=False
 use_vcd=False
 use_m3id=False
 use_diffusion=True
-diffusion_loops=3
+diffusion_loops=1
 
 degf_alpha_pos=3.0
 degf_alpha_neg=1.0
@@ -54,7 +54,7 @@ experiment_index=3
 #####################################
 # Run single experiment
 #####################################
-export CUDA_VISIBLE_DEVICES=3
+export CUDA_VISIBLE_DEVICES=2
 master_port=$(python3 - <<'PY'
 import socket
 s = socket.socket()

@@ -93,6 +93,13 @@ def parse_args():
     return args
 
 
+def log_experiment_args(logger, args):
+    logger.info("===== Experiment Parameters =====")
+    for key, value in sorted(vars(args).items()):
+        logger.info(f"{key}: {value}")
+    logger.info("=================================")
+
+
 def print_acc(pred_list, label_list, logger):
     pos = 1
     neg = 0
@@ -165,6 +172,7 @@ def main():
         experiment_dir = f"{args.log_path}/{model_string_name}/{args.degf_alpha_pos}_{args.degf_alpha_neg}_{args.degf_beta}"  # Create an experiment folder
         os.makedirs(experiment_dir, exist_ok=True)
         logger = create_logger(experiment_dir)
+        log_experiment_args(logger, args)
         logger.info(f"Experiment directory created at {experiment_dir}")
     else:
         logger = create_logger(None)

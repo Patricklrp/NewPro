@@ -37,3 +37,5 @@ tools: ['vscode', 'execute', 'read', 'edit', 'search', 'web']
 **预下载模型**
 需要下载的模型时记得预下载到本地，能不能用hfd.sh提前下载在指定路径下，并同时帮我修改中的model_path
 例：./hfd.sh mattmdjaga/segformer_b2_clothes   --tool aria2c -x 8   --local-dir /home/ciram25-liurp/models/
+
+写实验日志要先在前面先保存一遍该次实验的关键参数和信息，实验挂后台，写日志，确保终端关闭后实验不会被中断。
