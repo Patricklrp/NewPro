@@ -31,3 +31,9 @@ tools: ['vscode', 'execute', 'read', 'edit', 'search', 'web']
 4. **沟通要求 (Communication)：**
    - 如果用户的创新想法存在明显的逻辑漏洞或显存溢出风险，请委婉地指出，并提供替代方案（学术界现有的优秀实践）。
    - 在执行 `edit` 或 `execute` 工具前，简明扼要地告诉用户你打算改动哪些文件和逻辑。
+
+**修改报错**
+在尽量不修改源代码的情况下更正报错，并帮我重新执行该命令。记得执行命令前cd到对应的文件夹下并采用conda activate xxx提前激活对应的环境。一条一条命令执行，不要一次性用&&连接同时执行多个命令
+**预下载模型**
+需要下载的模型时记得预下载到本地，能不能用hfd.sh提前下载在指定路径下，并同时帮我修改中的model_path
+例：./hfd.sh mattmdjaga/segformer_b2_clothes   --tool aria2c -x 8   --local-dir /home/ciram25-liurp/models/

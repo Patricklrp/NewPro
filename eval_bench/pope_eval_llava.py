@@ -3,12 +3,14 @@ import sys
 import json
 import random
 import argparse
+import time
 import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+from datetime import datetime, timedelta
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -80,6 +82,7 @@ def parse_args():
     
     parser.add_argument("--use_m3id", type=str2bool, default=False)
     parser.add_argument("--use_diffusion", type=str2bool, default=False)
+    parser.add_argument("--diffusion_loops", type=int, default=1)
     
     parser.add_argument("--degf_alpha_pos", type=float, default=3)
     parser.add_argument("--degf_alpha_neg", type=float, default=1)
@@ -161,8 +164,11 @@ def main():
         # experiment_dir = f"{args.log_path}/{model_string_name}/{experiment_index:03d}"  # Create an experiment folder
         experiment_dir = f"{args.log_path}/{model_string_name}/{args.degf_alpha_pos}_{args.degf_alpha_neg}_{args.degf_beta}/{args.experiment_index}"  # Create an experiment folder
         os.makedirs(experiment_dir, exist_ok=True)
-        logger = create_logger(experiment_dir)
+        run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_log_filename = f"pope_eval_{run_stamp}.log"
+        logger = create_logger(experiment_dir, log_filename=run_log_filename)
         logger.info(f"Experiment directory created at {experiment_dir}")
+        logger.info(f"Run log file: {os.path.join(experiment_dir, run_log_filename)}")
     else:
         logger = create_logger(None)
 
@@ -219,6 +225,9 @@ def main():
         # sd_pipe = get_image_variation_pipeline()
         pipe = get_image_generation_pipeline()
 
+    run_start_time = time.time()
+    total_batches = len(pope_loader)
+
     for batch_id, data in tqdm(enumerate(pope_loader), total=len(pope_loader)):
         image = data["image"][0]
         qs = data["query"][0]
@@ -248,83 +257,77 @@ def main():
             image_neg = add_diffusion_noise(image, args.noise_step)
             
         elif args.use_diffusion:
-            raw_image = Image.open(image_path[0])
-            # pos_aug = random.choice(list(aug_dict.keys()))
+            # Iteratively refine negative image using regenerated descriptions.
+            loop_count = max(1, int(args.diffusion_loops))
+            description = ""
+            for loop_idx in range(loop_count):
+                conv_out = Conversation(
+                    system="A chat between a curious human and an artificial intelligence assistant. "
+                        "The assistant gives helpful, detailed, and polite answers to the human's questions.",
+                    roles=("USER", "ASSISTANT"),
+                    version="v1",
+                    messages=[],
+                    offset=0,
+                    sep_style=SeparatorStyle.TWO,
+                    sep=" ",
+                    sep2="</s>",
+                )
 
-            # if pos_aug is not None:
-            #     raw_image_pos = aug_dict[pos_aug](raw_image)
-            #     image_pos = image_processor.preprocess(raw_image_pos, return_tensor='pt')['pixel_values'][0] 
-            #     image_pos = torch.tensor(image_pos)
-                
-            # pos_aug_counter[pos_aug] += 1
-            # logger.info(f"RITUAL Transformation: {pos_aug}")
-            
-            
-            conv_out = Conversation(
-                system="A chat between a curious human and an artificial intelligence assistant. "
-                    "The assistant gives helpful, detailed, and polite answers to the human's questions.",
-                roles=("USER", "ASSISTANT"),
-                version="v1",
-                messages=[],
-                offset=0,
-                sep_style=SeparatorStyle.TWO,
-                sep=" ",
-                sep2="</s>",
-            )
-            
-            # qs_desc = qs + " If yes, describe all relevant details of this object only. If no, describe all existing objects in the image."
-            qs_desc = qs + " Briefly describe relevant details."
-            qu_out = DEFAULT_IMAGE_TOKEN + '\n' + qs_desc # for opera? setting
-            # qu_out = DEFAULT_IMAGE_TOKEN + '\n' + qs + " Please answer this question with one word." # for VCD setting
-            conv_out.append_message(conv_out.roles[0], qu_out)
-            conv_out.append_message(conv_out.roles[1], None)
-            prompt_out = conv_out.get_prompt()
-            
-            input_ids = tokenizer_image_token(prompt_out, tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).cuda()
-            stop_str = conv_out.sep if conv_out.sep_style != SeparatorStyle.TWO else conv_out.sep2
-                
-            logger.info("[Diffusion] Generating description (use_diffusion=False for this step)")
-            with torch.inference_mode():
-                with torch.no_grad():
-                    output_ids, _ = model.generate(
-                        input_ids,
-                        images=image.unsqueeze(0).half().cuda(),
-                        images_pos=(image_pos.unsqueeze(0).half().cuda() if image_pos is not None else None),
-                        images_neg=(image_neg.unsqueeze(0).half().cuda() if image_neg is not None else None),
-                        do_sample=False,
-                        temperature=args.temperature,
-                        top_p=args.top_p,
-                        top_k=args.top_k,
-                        max_new_tokens=1024,
-                        use_cache=True,
-                        use_ritual=False,
-                        use_vcd=False,
-                        use_m3id=False,
-                        use_diffusion=False,
-                        degf_alpha_pos=args.degf_alpha_pos,
-                        degf_alpha_neg=args.degf_alpha_neg,
-                        degf_beta=args.degf_beta,
-                    )
-                    
-            input_token_len = input_ids.shape[1]
-            n_diff_input_output = (input_ids != output_ids[:, :input_token_len]).sum().item()
-            if n_diff_input_output > 0:
-                print(f'[Warning] {n_diff_input_output} output_ids are not the same as the input_ids')
-            description = tokenizer.batch_decode(output_ids[:, input_token_len:], skip_special_tokens=True)[0]
-            description = description.strip()
-            if description.endswith(stop_str):
-                description = description[:-len(stop_str)]
+                qs_desc = qs + " Briefly describe relevant details."
+                qu_out = DEFAULT_IMAGE_TOKEN + '\n' + qs_desc
+                conv_out.append_message(conv_out.roles[0], qu_out)
+                conv_out.append_message(conv_out.roles[1], None)
+                prompt_out = conv_out.get_prompt()
+
+                input_ids = tokenizer_image_token(prompt_out, tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).cuda()
+                stop_str = conv_out.sep if conv_out.sep_style != SeparatorStyle.TWO else conv_out.sep2
+
+                logger.info(f"[Diffusion] Loop {loop_idx + 1}/{loop_count}: Generating description (use_diffusion=False for this step)")
+                with torch.inference_mode():
+                    with torch.no_grad():
+                        output_ids, _ = model.generate(
+                            input_ids,
+                            images=image.unsqueeze(0).half().cuda(),
+                            images_pos=(image_pos.unsqueeze(0).half().cuda() if image_pos is not None else None),
+                            images_neg=(image_neg.unsqueeze(0).half().cuda() if image_neg is not None else None),
+                            do_sample=False,
+                            temperature=args.temperature,
+                            top_p=args.top_p,
+                            top_k=args.top_k,
+                            max_new_tokens=1024,
+                            use_cache=True,
+                            use_ritual=False,
+                            use_vcd=False,
+                            use_m3id=False,
+                            use_diffusion=False,
+                            degf_alpha_pos=args.degf_alpha_pos,
+                            degf_alpha_neg=args.degf_alpha_neg,
+                            degf_beta=args.degf_beta,
+                        )
+
+                input_token_len = input_ids.shape[1]
+                n_diff_input_output = (input_ids != output_ids[:, :input_token_len]).sum().item()
+                if n_diff_input_output > 0:
+                    print(f'[Warning] {n_diff_input_output} output_ids are not the same as the input_ids')
+
+                description = tokenizer.batch_decode(output_ids[:, input_token_len:], skip_special_tokens=True)[0]
+                description = description.strip()
+                if description.endswith(stop_str):
+                    description = description[:-len(stop_str)]
+
+                logger.info(f"V: {image_path}")
+                logger.info(f"Q: {qs_desc}")
+                logger.info(f"D(loop {loop_idx + 1}): {description}")
+
+                raw_image = Image.open(image_path[0])
+                raw_image.save('raw_image.png')
+                raw_image_neg = generate_image_stable_diffusion(pipe, description)
+                raw_image_neg.save('image_neg.png')
+                image_neg = image_processor.preprocess(raw_image_neg, return_tensor='pt')['pixel_values'][0]
+                image_neg = torch.tensor(image_neg)
+
+            # Keep one auxiliary prediction per sample based on the final refined description.
             pred_list2 = recorder(description, pred_list2)
-            logger.info(f"V: {image_path}")
-            logger.info(f"Q: {qs_desc}")
-            logger.info(f"D: {description}")
-            
-            raw_image = Image.open(image_path[0])
-            raw_image.save('raw_image.png')
-            raw_image_neg = generate_image_stable_diffusion(pipe, description)
-            raw_image_neg.save('image_neg.png')
-            image_neg = image_processor.preprocess(raw_image_neg, return_tensor='pt')['pixel_values'][0]
-            image_neg = torch.tensor(image_neg)
         
         
         # ==============================================
@@ -408,6 +411,18 @@ def main():
         yes_ratio = round(yes_ratio*100,2)
         logger.info(
             f"acc: {acc}, precision: {precision}, recall: {recall}, f1: {f1}, yes_ratio: {yes_ratio}"
+        )
+
+        finished_batches = batch_id + 1
+        elapsed_seconds = max(time.time() - run_start_time, 1e-6)
+        iter_per_second = finished_batches / elapsed_seconds
+        remaining_batches = max(total_batches - finished_batches, 0)
+        eta_seconds = int(remaining_batches / iter_per_second) if iter_per_second > 0 else -1
+        elapsed_text = str(timedelta(seconds=int(elapsed_seconds)))
+        eta_text = str(timedelta(seconds=eta_seconds)) if eta_seconds >= 0 else "unknown"
+        logger.info(
+            f"[Progress] {finished_batches}/{total_batches} ({100.0 * finished_batches / total_batches:.2f}%), "
+            f"elapsed={elapsed_text}, eta={eta_text}, speed={iter_per_second:.3f} it/s"
         )
         
         logger.info(f"="*50)

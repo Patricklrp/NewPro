@@ -6,7 +6,7 @@ type="popular" # random | popular | adversarial
 
 
 # llava | instructblip | qwen-vl
-model="qwen-vl"
+model="llava"
 model_root="/home/ciram25-liurp/models"
 data_root="/home/ciram25-liurp/dataset"
 
@@ -43,6 +43,7 @@ use_ritual=False
 use_vcd=False
 use_m3id=False
 use_diffusion=True
+diffusion_loops=3
 
 degf_alpha_pos=3.0
 degf_alpha_neg=1.0
@@ -53,7 +54,7 @@ experiment_index=3
 #####################################
 # Run single experiment
 #####################################
-export CUDA_VISIBLE_DEVICES=2
+export CUDA_VISIBLE_DEVICES=3
 master_port=$(python3 - <<'PY'
 import socket
 s = socket.socket()
@@ -67,6 +68,11 @@ if [ "${CONDA_DEFAULT_ENV}" != "DeGF" ]; then
 	if command -v conda >/dev/null 2>&1; then
 		TORCHRUN_CMD="conda run -n DeGF torchrun"
 	fi
+fi
+
+EXTRA_ARGS=""
+if [ "${model}" = "llava" ]; then
+	EXTRA_ARGS="--diffusion_loops ${diffusion_loops}"
 fi
 
 ${TORCHRUN_CMD} --nnodes=1 --nproc_per_node=1 --master_port ${master_port} eval_bench/pope_eval_${model}.py \
@@ -83,4 +89,5 @@ ${TORCHRUN_CMD} --nnodes=1 --nproc_per_node=1 --master_port ${master_port} eval_
 --degf_alpha_pos ${degf_alpha_pos} \
 --degf_alpha_neg ${degf_alpha_neg} \
 --degf_beta ${degf_beta} \
---experiment_index ${experiment_index}
+--experiment_index ${experiment_index} \
+${EXTRA_ARGS}

@@ -2,7 +2,7 @@ import torch.distributed as dist
 import logging
 
 
-def create_logger(logging_dir):
+def create_logger(logging_dir, log_filename="log.txt"):
     """
     Create a logger that writes to a log file and stdout.
     """
@@ -11,7 +11,7 @@ def create_logger(logging_dir):
             level=logging.INFO,
             format="[%(asctime)s] %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
-            handlers=[logging.StreamHandler(), logging.FileHandler(f"{logging_dir}/log.txt")],
+            handlers=[logging.StreamHandler(), logging.FileHandler(f"{logging_dir}/{log_filename}")],
         )
         logger = logging.getLogger(__name__)
     else:  # dummy logger (does nothing)

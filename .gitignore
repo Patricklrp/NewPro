@@ -27,3 +27,12 @@ output/
 # Temp files
 *.tmp
 *.log
+
+# Images
+*.png
+*.jpg
+*.jpeg
+*.bmp
+*.webp
+*.tif
+*.tiff
