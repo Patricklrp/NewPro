@@ -3,6 +3,8 @@ import sys
 import json
 import random
 import argparse
+import time
+import csv
 import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
@@ -87,6 +89,7 @@ def parse_args():
     
     parser.add_argument("--max_new_tokens", type=int, default=1024)
     parser.add_argument("--experiment_index", type=int, default=0)
+    parser.add_argument("--max_samples", type=int, default=0)
 
     args = parser.parse_args()
     return args
@@ -162,9 +165,24 @@ def main():
         experiment_dir = f"{args.log_path}/{model_string_name}/{args.degf_alpha_pos}_{args.degf_alpha_neg}_{args.degf_beta}/{args.experiment_index}"  # Create an experiment folder
         os.makedirs(experiment_dir, exist_ok=True)
         logger = create_logger(experiment_dir)
+        run_stamp = time.strftime("%Y%m%d_%H%M%S")
+        timing_csv_path = os.path.join(experiment_dir, f"timing_{run_stamp}.csv")
+        with open(timing_csv_path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                "sample_idx",
+                "total_sec",
+                "llm_sec",
+                "diffusion_sec",
+                "other_sec",
+                "question",
+                "answer",
+            ])
         logger.info(f"Experiment directory created at {experiment_dir}")
+        logger.info(f"Timing csv: {timing_csv_path}")
     else:
         logger = create_logger(None)
+        timing_csv_path = None
 
     # ========================================
     #             Model & Dataset
@@ -219,7 +237,17 @@ def main():
         # sd_pipe = get_image_variation_pipeline()
         pipe = get_image_generation_pipeline()
 
+    timing_count = 0
+    timing_total_sec_sum = 0.0
+    timing_llm_sec_sum = 0.0
+    timing_diffusion_sec_sum = 0.0
+    timing_other_sec_sum = 0.0
+
     for batch_id, data in tqdm(enumerate(pope_loader), total=len(pope_loader)):
+        sample_t0 = time.perf_counter()
+        llm_time_sec = 0.0
+        diffusion_time_sec = 0.0
+
         image = data["image"][0]
         qs = data["query"][0]
         label = data["label"]
@@ -284,6 +312,7 @@ def main():
             stop_str = conv_out.sep if conv_out.sep_style != SeparatorStyle.TWO else conv_out.sep2
                 
             logger.info("[Diffusion] Generating description (use_diffusion=False for this step)")
+            llm_t0 = time.perf_counter()
             with torch.inference_mode():
                 with torch.no_grad():
                     output_ids, _ = model.generate(
@@ -305,6 +334,7 @@ def main():
                         degf_alpha_neg=args.degf_alpha_neg,
                         degf_beta=args.degf_beta,
                     )
+            llm_time_sec += time.perf_counter() - llm_t0
                     
             input_token_len = input_ids.shape[1]
             n_diff_input_output = (input_ids != output_ids[:, :input_token_len]).sum().item()
@@ -321,7 +351,9 @@ def main():
             
             raw_image = Image.open(image_path[0])
             raw_image.save('raw_image.png')
+            diffusion_t0 = time.perf_counter()
             raw_image_neg = generate_image_stable_diffusion(pipe, description)
+            diffusion_time_sec += time.perf_counter() - diffusion_t0
             raw_image_neg.save('image_neg.png')
             image_neg = image_processor.preprocess(raw_image_neg, return_tensor='pt')['pixel_values'][0]
             image_neg = torch.tensor(image_neg)
@@ -352,6 +384,7 @@ def main():
         stop_str = conv_out.sep if conv_out.sep_style != SeparatorStyle.TWO else conv_out.sep2
 
         logger.info(f"[VQA] use_diffusion={args.use_diffusion}")
+        llm_t0 = time.perf_counter()
         with torch.inference_mode():
             with torch.no_grad():
                 output_ids, js_list = model.generate(
@@ -373,6 +406,7 @@ def main():
                     degf_alpha_neg=args.degf_alpha_neg,
                     degf_beta=args.degf_beta,
                 )
+        llm_time_sec += time.perf_counter() - llm_t0
                 
         input_token_len = input_ids.shape[1]
         n_diff_input_output = (input_ids != output_ids[:, :input_token_len]).sum().item()
@@ -409,6 +443,30 @@ def main():
         logger.info(
             f"acc: {acc}, precision: {precision}, recall: {recall}, f1: {f1}, yes_ratio: {yes_ratio}"
         )
+
+        sample_total_sec = time.perf_counter() - sample_t0
+        other_time_sec = max(sample_total_sec - llm_time_sec - diffusion_time_sec, 0.0)
+        timing_count += 1
+        timing_total_sec_sum += sample_total_sec
+        timing_llm_sec_sum += llm_time_sec
+        timing_diffusion_sec_sum += diffusion_time_sec
+        timing_other_sec_sum += other_time_sec
+        logger.info(
+            f"[Timing] sample={batch_id + 1}, total={sample_total_sec:.3f}s, "
+            f"llm={llm_time_sec:.3f}s, diffusion={diffusion_time_sec:.3f}s, other={other_time_sec:.3f}s"
+        )
+        if dist.get_rank() == 0 and timing_csv_path is not None:
+            with open(timing_csv_path, "a", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow([
+                    batch_id + 1,
+                    f"{sample_total_sec:.6f}",
+                    f"{llm_time_sec:.6f}",
+                    f"{diffusion_time_sec:.6f}",
+                    f"{other_time_sec:.6f}",
+                    qs,
+                    outputs,
+                ])
         
         logger.info(f"="*50)
         np.save(f"{experiment_dir}/pred_list.npy", pred_list)
@@ -416,8 +474,33 @@ def main():
         np.save(f"{experiment_dir}/js_list.npy", js_list_first)
         np.save(f"{experiment_dir}/label_list.npy", label_list)
 
+        if args.max_samples > 0 and (batch_id + 1) >= args.max_samples:
+            logger.info(f"Reached max_samples={args.max_samples}, stopping early.")
+            break
+
     if len(pred_list) != 0:
         logger.info(vars(args))
+        if timing_count > 0:
+            avg_total_sec = timing_total_sec_sum / timing_count
+            avg_llm_sec = timing_llm_sec_sum / timing_count
+            avg_diffusion_sec = timing_diffusion_sec_sum / timing_count
+            avg_other_sec = timing_other_sec_sum / timing_count
+            logger.info(
+                f"[TimingAvg] samples={timing_count}, total={avg_total_sec:.3f}s, "
+                f"llm={avg_llm_sec:.3f}s, diffusion={avg_diffusion_sec:.3f}s, other={avg_other_sec:.3f}s"
+            )
+            if dist.get_rank() == 0 and timing_csv_path is not None:
+                with open(timing_csv_path, "a", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerow([
+                        "AVG",
+                        f"{avg_total_sec:.6f}",
+                        f"{avg_llm_sec:.6f}",
+                        f"{avg_diffusion_sec:.6f}",
+                        f"{avg_other_sec:.6f}",
+                        "",
+                        "",
+                    ])
         # logger.info("Prompt for Aug:", prompt_aug)
         # logger.info("Prompt for ritual:", prompt_out)
         acc, precision, recall, f1, yes_ratio = print_acc(pred_list, label_list, logger)

@@ -132,6 +132,14 @@ def _is_stop_words(generated_ids, stop_words_ids):
     return False
 
 
+def _compute_dynamic_js_gamma(next_token_logits):
+    probs = F.softmax(next_token_logits, dim=-1)
+    entropy = -(probs * torch.log(probs.clamp_min(1e-12))).sum(dim=-1)
+    entropy_norm = (entropy / torch.log(torch.tensor(float(probs.shape[-1]), device=entropy.device))).clamp(0.0, 1.0)
+    entropy_score = float(entropy_norm.mean().item())
+    return 0.05 + 0.20 * entropy_score
+
+
 def qwen_chat_with_diffusion_fusion(
     tokenizer,
     model,
@@ -190,7 +198,8 @@ def qwen_chat_with_diffusion_fusion(
                  0.5 * F.kl_div(F.log_softmax(next_token_logits_neg, dim=-1), m, reduction='batchmean')
             js_list.append(format(js.item(), '.4f'))
 
-            if js < 0.1:
+            dynamic_gamma = _compute_dynamic_js_gamma(next_token_logits)
+            if float(js.item()) < dynamic_gamma:
                 diffs = next_token_logits + float(degf_alpha_pos) * next_token_logits_neg
             else:
                 diffs = (1 + float(degf_alpha_neg)) * next_token_logits - float(degf_alpha_neg) * next_token_logits_neg

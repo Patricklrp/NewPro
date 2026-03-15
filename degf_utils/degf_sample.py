@@ -20,6 +20,16 @@ import transformers
 from transformers.generation.utils import SampleOutput
 
 
+def _compute_dynamic_js_gamma(next_token_logits: torch.Tensor) -> float:
+    probs = nn.functional.softmax(next_token_logits, dim=-1)
+    entropy = -(probs * torch.log(probs.clamp_min(1e-12))).sum(dim=-1)
+    vocab_size = float(probs.shape[-1])
+    entropy_norm = (entropy / torch.log(torch.tensor(vocab_size, device=entropy.device))).clamp(0.0, 1.0)
+    entropy_score = float(entropy_norm.mean().item())
+    # Base gamma=0.1 with entropy-aware adaptation in [0.05, 0.25].
+    return 0.05 + 0.20 * entropy_score
+
+
 def sample(
     self,
     input_ids: torch.LongTensor,
@@ -186,7 +196,9 @@ def sample(
             degf_beta = model_kwargs.get("degf_beta") if model_kwargs.get("degf_beta") is not None else 0.1
 
             # set cutoff for Adaptive Plausibility Constraints
-            cutoff = torch.log(torch.tensor(degf_beta)) + next_token_logits.max(dim=-1, keepdim=True).values
+            cutoff = torch.log(
+                torch.tensor(degf_beta, device=next_token_logits.device, dtype=next_token_logits.dtype)
+            ) + next_token_logits.max(dim=-1, keepdim=True).values
             
             if use_ritual:
                 diffs = (next_token_logits + degf_alpha_pos * next_token_logits_pos)
@@ -200,13 +212,12 @@ def sample(
                 M = 0.5 * (nn.functional.softmax(next_token_logits, dim=-1) + nn.functional.softmax(next_token_logits_neg, dim=-1))
                 js = 0.5 * nn.functional.kl_div(nn.functional.log_softmax(next_token_logits, dim=-1), M, reduction='batchmean') + 0.5 * nn.functional.kl_div(nn.functional.log_softmax(next_token_logits_neg, dim=-1), M, reduction='batchmean')
                 js_list.append(format(js.item(), '.4f'))
-
-                if js < 0.1: # 0.1
-                    token_count += 1
+                token_count += 1
+                dynamic_gamma = _compute_dynamic_js_gamma(next_token_logits)
+                if float(js.item()) < dynamic_gamma:
                     diffs = next_token_logits + degf_alpha_pos * next_token_logits_neg
                 else:
                     js_count += 1
-                    token_count += 1
                     diffs = (1 + degf_alpha_neg) * next_token_logits - degf_alpha_neg * next_token_logits_neg
             
             logits = diffs.masked_fill(next_token_logits < cutoff, -float("inf"))
@@ -473,7 +484,9 @@ def greedy_search(
             degf_beta = model_kwargs.get("degf_beta") if model_kwargs.get("degf_beta") is not None else 0.1
 
             # set cutoff for Adaptive Plausibility Constraints
-            cutoff = torch.log(torch.tensor(degf_beta)) + next_token_logits.max(dim=-1, keepdim=True).values
+            cutoff = torch.log(
+                torch.tensor(degf_beta, device=next_token_logits.device, dtype=next_token_logits.dtype)
+            ) + next_token_logits.max(dim=-1, keepdim=True).values
             
             if use_ritual:
                 diffs = (next_token_logits + degf_alpha_pos * next_token_logits_pos)
@@ -498,12 +511,12 @@ def greedy_search(
                 # print("kl:",kl)
 
                 # diffs = (1 + (js + 0.5)) * next_token_logits - (js + 0.5) * next_token_logits_neg
-                if js < 0.1: # 0.1
-                    token_count += 1
+                token_count += 1
+                dynamic_gamma = _compute_dynamic_js_gamma(next_token_logits)
+                if float(js.item()) < dynamic_gamma:
                     diffs = next_token_logits + degf_alpha_pos * next_token_logits_neg
                 else:
                     js_count += 1
-                    token_count += 1
                     diffs = (1 + degf_alpha_neg) * next_token_logits - degf_alpha_neg * next_token_logits_neg
             
             logits = diffs.masked_fill(next_token_logits < cutoff, -float("inf"))
