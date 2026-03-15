@@ -5,6 +5,7 @@ import random
 import argparse
 import time
 import csv
+from datetime import datetime
 import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
@@ -95,6 +96,13 @@ def parse_args():
     return args
 
 
+def log_experiment_args(logger, args):
+    logger.info("===== Experiment Parameters =====")
+    for key, value in sorted(vars(args).items()):
+        logger.info(f"{key}: {value}")
+    logger.info("=================================")
+
+
 def print_acc(pred_list, label_list, logger):
     pos = 1
     neg = 0
@@ -154,6 +162,7 @@ def main():
     device = dist_util.device()
     
     # Setup an experiment folder:
+    experiment_dir = None
     if dist.get_rank() == 0:
         os.makedirs(
             args.log_path, exist_ok=True
@@ -162,10 +171,13 @@ def main():
         # experiment_index = len(glob(f"{args.log_path}/{model_string_name}/*")) + args.experiment_index
         # experiment_index = args.experiment_index
         # experiment_dir = f"{args.log_path}/{model_string_name}/{experiment_index:03d}"  # Create an experiment folder
-        experiment_dir = f"{args.log_path}/{model_string_name}/{args.degf_alpha_pos}_{args.degf_alpha_neg}_{args.degf_beta}/{args.experiment_index}"  # Create an experiment folder
+        # Keep logs grouped by model and DeGF hyper-parameters only for easier browsing.
+        experiment_dir = f"{args.log_path}/{model_string_name}/{args.degf_alpha_pos}_{args.degf_alpha_neg}_{args.degf_beta}"  # Create an experiment folder
         os.makedirs(experiment_dir, exist_ok=True)
-        logger = create_logger(experiment_dir)
-        run_stamp = time.strftime("%Y%m%d_%H%M%S")
+        run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_log_filename = f"pope_eval_{run_stamp}.log"
+        logger = create_logger(experiment_dir, log_filename=run_log_filename)
+        log_experiment_args(logger, args)
         timing_csv_path = os.path.join(experiment_dir, f"timing_{run_stamp}.csv")
         with open(timing_csv_path, "w", newline="") as f:
             writer = csv.writer(f)
@@ -179,6 +191,7 @@ def main():
                 "answer",
             ])
         logger.info(f"Experiment directory created at {experiment_dir}")
+        logger.info(f"Run log file: {os.path.join(experiment_dir, run_log_filename)}")
         logger.info(f"Timing csv: {timing_csv_path}")
     else:
         logger = create_logger(None)

@@ -50,7 +50,6 @@ degf_beta=0.25
 
 experiment_index=4
 max_samples=0
-
 #####################################
 # Run single experiment
 #####################################
@@ -83,6 +82,9 @@ ${TORCHRUN_CMD} --nnodes=1 --nproc_per_node=1 --master_port ${master_port} eval_
 --use_diffusion ${use_diffusion} \
 --degf_alpha_pos ${degf_alpha_pos} \
 --degf_alpha_neg ${degf_alpha_neg} \
+--degf_beta ${degf_beta} \
+--experiment_index ${experiment_index} \
+--max_samples ${max_samples}
 --degf_beta ${degf_beta} \
 --experiment_index ${experiment_index} \
 --max_samples ${max_samples}
