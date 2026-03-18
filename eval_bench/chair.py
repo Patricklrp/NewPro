@@ -216,16 +216,28 @@ class CHAIR(object):
         Output: MSCOCO words in the caption
         '''
     
-        #standard preprocessing
-        words = nltk.word_tokenize(caption.lower())
-        tagged_sent = nltk.pos_tag(words)
+        # Standard preprocessing with graceful fallback when NLTK resources
+        # (punkt/punkt_tab, tagger, wordnet) are unavailable on the machine.
+        try:
+            words = nltk.word_tokenize(caption.lower())
+        except LookupError:
+            words = nltk.tokenize.wordpunct_tokenize(caption.lower())
+
+        try:
+            tagged_sent = nltk.pos_tag(words)
+        except LookupError:
+            tagged_sent = [(w, 'N') for w in words]
+
         lemmas_sent = []
         wnl = WordNetLemmatizer()
-        for tag in tagged_sent:
-            wordnet_pos = self.get_wordnet_pos(tag[1]) or wordnet.NOUN
-            lemmas_sent.append(wnl.lemmatize(tag[0], pos=wordnet_pos))
-        # words = [singularize(w) for w in words]
-        words = lemmas_sent
+        try:
+            for tag in tagged_sent:
+                wordnet_pos = self.get_wordnet_pos(tag[1]) or wordnet.NOUN
+                lemmas_sent.append(wnl.lemmatize(tag[0], pos=wordnet_pos))
+            words = lemmas_sent
+        except LookupError:
+            # If wordnet resources are missing, continue with tokenized words.
+            pass
     
         #replace double words
         i = 0

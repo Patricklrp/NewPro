@@ -246,9 +246,19 @@ def main():
     pred_list, label_list = [], []
     pred_list2 = []
     js_list_first = []
+    diffusion_pair_raw_dir = None
+    diffusion_pair_gen_dir = None
     if args.use_diffusion:
         # sd_pipe = get_image_variation_pipeline()
         pipe = get_image_generation_pipeline()
+        if experiment_dir is not None:
+            pair_root_dir = os.path.join(experiment_dir, "diffusion_pairs")
+            diffusion_pair_raw_dir = os.path.join(pair_root_dir, "raw")
+            diffusion_pair_gen_dir = os.path.join(pair_root_dir, "generated")
+            os.makedirs(diffusion_pair_raw_dir, exist_ok=True)
+            os.makedirs(diffusion_pair_gen_dir, exist_ok=True)
+            logger.info(f"Diffusion raw image dir: {diffusion_pair_raw_dir}")
+            logger.info(f"Diffusion generated image dir: {diffusion_pair_gen_dir}")
 
     timing_count = 0
     timing_total_sec_sum = 0.0
@@ -362,12 +372,17 @@ def main():
             logger.info(f"Q: {qs_desc}")
             logger.info(f"D: {description}")
             
-            raw_image = Image.open(image_path[0])
-            raw_image.save('raw_image.png')
+            sample_idx = batch_id + 1
+            sample_name = f"{sample_idx:06d}.png"
+            if diffusion_pair_raw_dir is not None:
+                raw_save_path = os.path.join(diffusion_pair_raw_dir, sample_name)
+                raw_image.save(raw_save_path)
             diffusion_t0 = time.perf_counter()
             raw_image_neg = generate_image_stable_diffusion(pipe, description)
             diffusion_time_sec += time.perf_counter() - diffusion_t0
-            raw_image_neg.save('image_neg.png')
+            if diffusion_pair_gen_dir is not None:
+                gen_save_path = os.path.join(diffusion_pair_gen_dir, sample_name)
+                raw_image_neg.save(gen_save_path)
             image_neg = image_processor.preprocess(raw_image_neg, return_tensor='pt')['pixel_values'][0]
             image_neg = torch.tensor(image_neg)
         

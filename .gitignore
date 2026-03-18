@@ -27,3 +27,9 @@ output/
 # Temp files
 *.tmp
 *.log
+
+# Experiment result files
+chair_results/**/*.json
+chair_results/**/*.jsonl
+output/**/*.json
+output/**/*.jsonl

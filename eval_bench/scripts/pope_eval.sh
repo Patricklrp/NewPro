@@ -85,6 +85,3 @@ ${TORCHRUN_CMD} --nnodes=1 --nproc_per_node=1 --master_port ${master_port} eval_
 --degf_beta ${degf_beta} \
 --experiment_index ${experiment_index} \
 --max_samples ${max_samples}
---degf_beta ${degf_beta} \
---experiment_index ${experiment_index} \
---max_samples ${max_samples}
