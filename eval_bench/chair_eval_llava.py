@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import subprocess
 import random
 import argparse
 import numpy as np
@@ -91,8 +92,41 @@ def parse_args():
     parser.add_argument("--max_new_tokens", type=int, default=64)
     parser.add_argument("--experiment_index", type=int, default=0)
 
+    parser.add_argument("--auto_eval_chair", type=str2bool, default=True)
+    parser.add_argument("--chair_eval_cache", type=str, default="chair.pkl")
+    parser.add_argument("--chair_eval_coco_path", type=str, default="")
+    parser.add_argument("--chair_eval_save_path", type=str, default="")
+
     args = parser.parse_known_args()[0]
     return args
+
+
+def auto_run_chair_eval(args, experiment_index, logger):
+    eval_index = f"{experiment_index:03d}"
+    cap_file = os.path.join(args.out_path, f"exp_{eval_index}.jsonl")
+    save_path = args.chair_eval_save_path or os.path.join(args.out_path, f"exp_{eval_index}_result.jsonl")
+    coco_path = args.chair_eval_coco_path or os.path.dirname(args.anno_path)
+
+    if not os.path.exists(cap_file):
+        logger.error(f"[CHAIR Eval] caption file not found: {cap_file}")
+        return
+
+    chair_cmd = [
+        sys.executable,
+        "eval_bench/chair.py",
+        "--cap_file", cap_file,
+        "--image_id_key", "image_id",
+        "--caption_key", "caption",
+        "--cache", args.chair_eval_cache,
+        "--coco_path", coco_path,
+        "--save_path", save_path,
+    ]
+    logger.info(f"[CHAIR Eval] running: {' '.join(chair_cmd)}")
+    try:
+        subprocess.run(chair_cmd, check=True)
+        logger.info(f"[CHAIR Eval] saved result to: {save_path}")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"[CHAIR Eval] failed with return code {e.returncode}")
 
 
 def main():
@@ -116,6 +150,9 @@ def main():
         logger.info(f"Experiment directory created at {experiment_dir}")
     else:
         logger = create_logger(None)
+
+    if dist.get_rank() == 0:
+        logger.info(f"[RunConfig] {json.dumps(vars(args), ensure_ascii=False, sort_keys=True)}")
 
     # ========================================
     #             Model & Dataset
@@ -169,7 +206,13 @@ def main():
     if args.use_diffusion:
         # sd_pipe = get_image_variation_pipeline()
         pipe = get_image_generation_pipeline()
-    for batch_id, data in tqdm(enumerate(chair_loader), total=args.num_eval_samples):
+
+    effective_total = min(args.num_eval_samples, len(chair_loader))
+    progress_bar = tqdm(total=effective_total, desc="CHAIR eval", dynamic_ncols=True)
+    start_time = time.time()
+    last_progress_log_time = start_time
+
+    for batch_id, data in enumerate(chair_loader):
 
         # early stop for debuggging purpose
         # if batch_id == 20:
@@ -181,8 +224,11 @@ def main():
         image_path = data["image_path"]
         image = data["image"]
 
+        raw_image = None
+        if args.use_ritual or args.use_diffusion:
+            raw_image = Image.open(image_path[0]).convert("RGB")
 
-        qs =  "Please describe this image in detail."
+        qs = "Please describe this image in detail."
 
         image_pos = None
         image_neg = None
@@ -191,7 +237,7 @@ def main():
             # ==============================================
             #              Image Transforms
             # ==============================================
-            raw_image = Image.open(image_path[0])
+            raw_image = raw_image if raw_image is not None else Image.open(image_path[0]).convert("RGB")
             pos_aug = random.choice(list(aug_dict.keys()))
 
             if pos_aug is not None:
@@ -361,6 +407,30 @@ def main():
         with open(os.path.join(args.out_path, f"exp_{experiment_index:03d}.jsonl"), "a") as f:
             json.dump(img_save, f)
             f.write('\n')
+
+        progress_bar.update(1)
+        now = time.time()
+        if (batch_id + 1) == effective_total or (now - last_progress_log_time) >= 30:
+            done = batch_id + 1
+            elapsed = now - start_time
+            avg_time = elapsed / max(done, 1)
+            remain = max(effective_total - done, 0)
+            eta_seconds = int(remain * avg_time)
+            eta_h, rem = divmod(eta_seconds, 3600)
+            eta_m, eta_s = divmod(rem, 60)
+            logger.info(
+                f"[Progress] {done}/{effective_total} ({done / effective_total * 100:.1f}%) | "
+                f"elapsed {elapsed:.1f}s | avg {avg_time:.2f}s/it | eta {eta_h:02d}:{eta_m:02d}:{eta_s:02d}"
+            )
+            last_progress_log_time = now
+
+    progress_bar.close()
+
+    if dist.is_available() and dist.is_initialized():
+        dist.barrier()
+
+    if dist.get_rank() == 0 and args.auto_eval_chair:
+        auto_run_chair_eval(args, experiment_index, logger)
     
     logger.info(vars(args))
 

@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import subprocess
 import argparse
 import torch
 import torch.distributed as dist
@@ -54,8 +55,41 @@ def parse_args():
     parser.add_argument("--max_new_tokens", type=int, default=64)
     parser.add_argument("--experiment_index", type=int, default=0)
 
+    parser.add_argument("--auto_eval_chair", type=str2bool, default=True)
+    parser.add_argument("--chair_eval_cache", type=str, default="chair.pkl")
+    parser.add_argument("--chair_eval_coco_path", type=str, default="")
+    parser.add_argument("--chair_eval_save_path", type=str, default="")
+
     args = parser.parse_args()
     return args
+
+
+def auto_run_chair_eval(args, logger):
+    eval_index = f"{args.experiment_index:03d}"
+    cap_file = os.path.join(args.out_path, f"exp_{eval_index}.jsonl")
+    save_path = args.chair_eval_save_path or os.path.join(args.out_path, f"exp_{eval_index}_result.jsonl")
+    coco_path = args.chair_eval_coco_path or os.path.dirname(args.anno_path)
+
+    if not os.path.exists(cap_file):
+        logger.error(f"[CHAIR Eval] caption file not found: {cap_file}")
+        return
+
+    chair_cmd = [
+        sys.executable,
+        "eval_bench/chair.py",
+        "--cap_file", cap_file,
+        "--image_id_key", "image_id",
+        "--caption_key", "caption",
+        "--cache", args.chair_eval_cache,
+        "--coco_path", coco_path,
+        "--save_path", save_path,
+    ]
+    logger.info(f"[CHAIR Eval] running: {' '.join(chair_cmd)}")
+    try:
+        subprocess.run(chair_cmd, check=True)
+        logger.info(f"[CHAIR Eval] saved result to: {save_path}")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"[CHAIR Eval] failed with return code {e.returncode}")
 
 
 def main():
@@ -72,6 +106,9 @@ def main():
         logger.info(f"Experiment directory created at {experiment_dir}")
     else:
         logger = create_logger(None)
+
+    if dist.get_rank() == 0:
+        logger.info(f"[RunConfig] {json.dumps(vars(args), ensure_ascii=False, sort_keys=True)}")
 
     if args.use_ritual or args.use_vcd or args.use_m3id or args.use_diffusion:
         logger.warning("Qwen-VL evaluation currently runs baseline generation only; DeGF options are ignored.")
@@ -143,6 +180,12 @@ def main():
         with open(os.path.join(args.out_path, f"exp_{args.experiment_index:03d}.jsonl"), "a") as f:
             json.dump(img_save, f)
             f.write('\n')
+
+    if dist.is_available() and dist.is_initialized():
+        dist.barrier()
+
+    if dist.get_rank() == 0 and args.auto_eval_chair:
+        auto_run_chair_eval(args, logger)
 
     logger.info(vars(args))
 

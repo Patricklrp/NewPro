@@ -148,6 +148,8 @@ class CHAIR(object):
     def __init__(self, coco_path):
 
         self.imid_to_objects = defaultdict(list) # later become a dict of sets
+        self.imid_to_captions = defaultdict(list)
+        self.gt_captions_available = None
 
         self.coco_path = coco_path
 
@@ -289,10 +291,35 @@ class CHAIR(object):
             sys.stdout.write('\rGetting annotations for %d/%d ground truth captions' 
                               %(i, len(coco_caps['annotations'])))
             imid = annotation['image_id']
+            self.imid_to_captions[imid].append(annotation['caption'])
             
             _, node_words, _, _ = self.caption_to_words(annotation['caption'])
             # note here is update, so call get_annotations_from_segments first
             self.imid_to_objects[imid].extend(node_words)
+        print("\n")
+
+    def ensure_gt_captions(self):
+        if not hasattr(self, 'imid_to_captions'):
+            self.imid_to_captions = defaultdict(list)
+
+        if len(self.imid_to_captions) > 0:
+            self.gt_captions_available = True
+            return
+
+        try:
+            coco_caps = combine_coco_captions(self.coco_path)
+        except Exception as e:
+            self.gt_captions_available = False
+            print(f"Warning: GT caption annotations unavailable, fallback to object-level GT only. ({e})")
+            return
+
+        self.gt_captions_available = True
+        caption_annotations = coco_caps['annotations']
+        for i, annotation in enumerate(caption_annotations):
+            sys.stdout.write('\rBuilding gt caption map %d/%d'
+                             % (i, len(caption_annotations)))
+            imid = annotation['image_id']
+            self.imid_to_captions[imid].append(annotation['caption'])
         print("\n")
 
 
@@ -313,6 +340,7 @@ class CHAIR(object):
         Given ground truth objects and generated captions, determine which sentences have hallucinated words.
         '''
         self._load_generated_captions_into_evaluator(cap_file, image_id_key, caption_key)
+        self.ensure_gt_captions()
         
         imid_to_objects = self.imid_to_objects
         caps = self.caps
@@ -340,10 +368,14 @@ class CHAIR(object):
             words, node_words, idxs, raw_words = self.caption_to_words(cap) 
  
             gt_objects = imid_to_objects[imid]
+            gt_captions = self.imid_to_captions.get(imid, [])
             cap_dict = {'image_id': imid, 
                         'caption': cap,
+                        'mscoco_gt_captions': list(gt_captions),
+                        'mscoco_gt_captions_concat': ' || '.join(gt_captions),
                         'mscoco_hallucinated_words': [],
                         'mscoco_gt_words': list(gt_objects),
+                        'mscoco_gt_words_concat': ' | '.join(sorted(list(gt_objects))),
                         'mscoco_generated_words': list(node_words),
                         'hallucination_idxs': [], 
                         'words': raw_words 
@@ -457,10 +489,16 @@ if __name__ == '__main__':
                         help="saving CHAIR evaluate and results to json, useful for debugging the caption model.")
     
     args = parser.parse_args()
+    print(f"[RunConfig] {json.dumps(vars(args), ensure_ascii=False, sort_keys=True)}")
 
     if args.cache and os.path.exists(args.cache):
         evaluator = pickle.load(open(args.cache, 'rb'))
         print(f"loaded evaluator from cache: {args.cache}")
+        if not hasattr(evaluator, 'imid_to_captions') or len(evaluator.imid_to_captions) == 0:
+            print("cache missing gt caption map, patching cache...")
+            evaluator.ensure_gt_captions()
+            pickle.dump(evaluator, open(args.cache, 'wb'))
+            print(f"updated evaluator cache: {args.cache}")
     else:
         print(f"cache not setted or not exist yet, building from scratch...")
         evaluator = CHAIR(args.coco_path)
@@ -473,6 +511,7 @@ if __name__ == '__main__':
     
     if args.save_path:
         save_hallucinated_words(args.save_path, cap_dict)
+        print(f"saved CHAIR result to: {args.save_path}")
 
 
 # CUDA_VISIBLE_DEVICES=5 python chair.py \
