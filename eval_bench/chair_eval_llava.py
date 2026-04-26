@@ -39,6 +39,8 @@ from degf_utils.vcd_add_noise import add_diffusion_noise
 from degf_utils.image_variation import get_image_variation_pipeline, apply_image_variation
 from degf_utils.image_similarity import get_clip_similarity
 from degf_utils.image_generation import get_image_generation_pipeline, generate_image_stable_diffusion
+from degf_utils.clip_text_risk import load_clip_risk_bundle
+from degf_utils.sd_feedback_scoring import load_sd_pipeline_for_feedback
 
 evolve_degf_sampling()
 torch.multiprocessing.set_sharing_strategy('file_system')
@@ -87,6 +89,21 @@ def parse_args():
     parser.add_argument("--degf_alpha_pos", type=float, default=3)
     parser.add_argument("--degf_alpha_neg", type=float, default=1)
     parser.add_argument("--degf_beta", type=float, default=0.1)
+    parser.add_argument("--degf_risk_threshold", type=float, default=0.1)
+    parser.add_argument("--degf_risk_metric", type=str, default="clip")
+    parser.add_argument("--degf_clip_model_path", type=str, default="/home/ciram25-liurp/models/clip-vit-base-patch32")
+    parser.add_argument("--degf_clip_prompt_template", type=str, default="a photo of {}")
+    parser.add_argument("--degf_clip_device", type=str, default="")
+    parser.add_argument("--degf_enable_np_cache", type=str2bool, default=False)
+    parser.add_argument("--degf_np_cache_size", type=int, default=64)
+    parser.add_argument("--degf_debug_np_cache", type=str2bool, default=False)
+    parser.add_argument("--degf_enable_sd_logit_intervention", type=str2bool, default=False)
+    parser.add_argument("--degf_sd_lambda", type=float, default=1.0)
+    parser.add_argument("--degf_sd_topk", type=int, default=8)
+    parser.add_argument("--degf_sd_timestep", type=int, default=500)
+    parser.add_argument("--degf_sd_unet_batch_size", type=int, default=0)
+    parser.add_argument("--degf_sd_seed", type=int, default=1234)
+    parser.add_argument("--degf_debug_sd_logit_intervention", type=str2bool, default=False)
 
     parser.add_argument("--num_eval_samples", type=int, default=500)
     parser.add_argument("--max_new_tokens", type=int, default=64)
@@ -206,6 +223,13 @@ def main():
     if args.use_diffusion:
         # sd_pipe = get_image_variation_pipeline()
         pipe = get_image_generation_pipeline()
+    sd_feedback_pipe = None
+    degf_clip_bundle = None
+    if args.use_diffusion and str(args.degf_risk_metric).lower() == "clip":
+        clip_device = args.degf_clip_device or ("cuda" if torch.cuda.is_available() else "cpu")
+        degf_clip_bundle = load_clip_risk_bundle(model_path=args.degf_clip_model_path, device=clip_device)
+    if args.degf_enable_sd_logit_intervention:
+        sd_feedback_pipe = load_sd_pipeline_for_feedback(device="cuda" if torch.cuda.is_available() else "cpu")
 
     effective_total = min(args.num_eval_samples, len(chair_loader))
     progress_bar = tqdm(total=effective_total, desc="CHAIR eval", dynamic_ncols=True)
@@ -226,6 +250,8 @@ def main():
 
         raw_image = None
         if args.use_ritual or args.use_diffusion:
+            raw_image = Image.open(image_path[0]).convert("RGB")
+        if args.degf_enable_sd_logit_intervention and raw_image is None:
             raw_image = Image.open(image_path[0]).convert("RGB")
 
         qs = "Please describe this image in detail."
@@ -251,7 +277,7 @@ def main():
         elif args.use_vcd:
             image_neg = add_diffusion_noise(image, args.noise_step)
         
-        elif args.use_diffusion:
+        elif args.use_diffusion and not args.degf_enable_sd_logit_intervention:
             conv_out = Conversation(
                 system="A chat between a curious human and an artificial intelligence assistant. "
                     "The assistant gives helpful, detailed, and polite answers to the human's questions.",
@@ -281,6 +307,27 @@ def main():
             # ==============================================
             #                ritual method
             # ==============================================
+            model._degf_runtime_context = {
+                "degf_risk_threshold": args.degf_risk_threshold,
+                "degf_risk_metric": args.degf_risk_metric,
+                "degf_clip_bundle": degf_clip_bundle,
+                "degf_clip_model_path": args.degf_clip_model_path,
+                "degf_clip_prompt_template": args.degf_clip_prompt_template,
+                "degf_clip_device": args.degf_clip_device,
+                "degf_enable_np_cache": args.degf_enable_np_cache,
+                "degf_np_cache_size": args.degf_np_cache_size,
+                "degf_debug_np_cache": args.degf_debug_np_cache,
+                "degf_tokenizer": tokenizer,
+                "degf_enable_sd_logit_intervention": False,
+                "degf_sd_lambda": args.degf_sd_lambda,
+                "degf_sd_topk": args.degf_sd_topk,
+                "degf_sd_timestep": args.degf_sd_timestep,
+                "degf_sd_unet_batch_size": args.degf_sd_unet_batch_size,
+                "degf_sd_seed": args.degf_sd_seed,
+                "degf_debug_sd_logit_intervention": args.degf_debug_sd_logit_intervention,
+                "degf_sd_pipe": sd_feedback_pipe,
+                "degf_raw_image": raw_image,
+            }
             with torch.inference_mode():
                 with torch.no_grad():
                     output_ids, _ = model.generate(
@@ -355,9 +402,30 @@ def main():
         # ==============================================
         #                ritual method
         # ==============================================
+        model._degf_runtime_context = {
+            "degf_risk_threshold": args.degf_risk_threshold,
+            "degf_risk_metric": args.degf_risk_metric,
+            "degf_clip_bundle": degf_clip_bundle,
+            "degf_clip_model_path": args.degf_clip_model_path,
+            "degf_clip_prompt_template": args.degf_clip_prompt_template,
+            "degf_clip_device": args.degf_clip_device,
+            "degf_enable_np_cache": args.degf_enable_np_cache,
+            "degf_np_cache_size": args.degf_np_cache_size,
+            "degf_debug_np_cache": args.degf_debug_np_cache,
+            "degf_tokenizer": tokenizer,
+            "degf_enable_sd_logit_intervention": args.degf_enable_sd_logit_intervention,
+            "degf_sd_lambda": args.degf_sd_lambda,
+            "degf_sd_topk": args.degf_sd_topk,
+            "degf_sd_timestep": args.degf_sd_timestep,
+            "degf_sd_unet_batch_size": args.degf_sd_unet_batch_size,
+            "degf_sd_seed": args.degf_sd_seed,
+            "degf_debug_sd_logit_intervention": args.degf_debug_sd_logit_intervention,
+            "degf_sd_pipe": sd_feedback_pipe,
+            "degf_raw_image": raw_image,
+        }
         with torch.inference_mode():
             with torch.no_grad():
-                output_ids, js_list = model.generate(
+                output_ids, risk_list = model.generate(
                     input_ids,
                     images=image.unsqueeze(0).half().cuda(),
                     images_pos=(image_pos.unsqueeze(0).half().cuda() if image_pos is not None else None),
@@ -394,8 +462,8 @@ def main():
         # if args.use_diffusion:
         #     output_list = [tokenizer.decode([token]) for token in output_ids[:, input_token_len:].tolist()[0]]
         #     printout = ""
-        #     for token, js in zip(output_list, js_list):
-        #         printout += f"{token}({js}) "
+        #     for token, risk in zip(output_list, risk_list):
+        #         printout += f"{token}({risk}) "
         #     logger.info(printout)
         logger.info(f"="*50)
 
@@ -420,7 +488,7 @@ def main():
             eta_m, eta_s = divmod(rem, 60)
             logger.info(
                 f"[Progress] {done}/{effective_total} ({done / effective_total * 100:.1f}%) | "
-                f"elapsed {elapsed:.1f}s | avg {avg_time:.2f}s/it | eta {eta_h:02d}:{eta_m:02d}:{eta_s:02d}"
+                f"elapsed {elapsed:.1f}s | avg {avg_time:.2f}s/it | ETA {eta_h:02d}:{eta_m:02d}:{eta_s:02d}"
             )
             last_progress_log_time = now
 

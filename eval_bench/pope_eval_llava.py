@@ -40,6 +40,8 @@ from degf_utils.vcd_add_noise import add_diffusion_noise
 from degf_utils.image_variation import get_image_variation_pipeline, apply_image_variation
 from degf_utils.image_similarity import get_clip_similarity
 from degf_utils.image_generation import get_image_generation_pipeline, generate_image_stable_diffusion
+from degf_utils.clip_text_risk import load_clip_risk_bundle
+from degf_utils.sd_feedback_scoring import load_sd_pipeline_for_feedback
 # from huggingface_hub import login
 
 # login()
@@ -87,6 +89,21 @@ def parse_args():
     parser.add_argument("--degf_alpha_pos", type=float, default=3)
     parser.add_argument("--degf_alpha_neg", type=float, default=1)
     parser.add_argument("--degf_beta", type=float, default=0.1)
+    parser.add_argument("--degf_risk_threshold", type=float, default=0.1)
+    parser.add_argument("--degf_risk_metric", type=str, default="clip")
+    parser.add_argument("--degf_clip_model_path", type=str, default="/home/ciram25-liurp/models/clip-vit-base-patch32")
+    parser.add_argument("--degf_clip_prompt_template", type=str, default="a photo of {}")
+    parser.add_argument("--degf_clip_device", type=str, default="")
+    parser.add_argument("--degf_enable_np_cache", type=str2bool, default=False)
+    parser.add_argument("--degf_np_cache_size", type=int, default=64)
+    parser.add_argument("--degf_debug_np_cache", type=str2bool, default=False)
+    parser.add_argument("--degf_enable_sd_logit_intervention", type=str2bool, default=False)
+    parser.add_argument("--degf_sd_lambda", type=float, default=1.0)
+    parser.add_argument("--degf_sd_topk", type=int, default=8)
+    parser.add_argument("--degf_sd_timestep", type=int, default=500)
+    parser.add_argument("--degf_sd_unet_batch_size", type=int, default=0)
+    parser.add_argument("--degf_sd_seed", type=int, default=1234)
+    parser.add_argument("--degf_debug_sd_logit_intervention", type=str2bool, default=False)
     
     parser.add_argument("--max_new_tokens", type=int, default=1024)
     parser.add_argument("--experiment_index", type=int, default=0)
@@ -244,10 +261,17 @@ def main():
     logger.info("Start eval...")
     pred_list, label_list = [], []
     pred_list2 = []
-    js_list_first = []
+    risk_list_first = []
     if args.use_diffusion:
         # sd_pipe = get_image_variation_pipeline()
         pipe = get_image_generation_pipeline()
+    sd_feedback_pipe = None
+    degf_clip_bundle = None
+    if args.use_diffusion and str(args.degf_risk_metric).lower() == "clip":
+        clip_device = args.degf_clip_device or ("cuda" if torch.cuda.is_available() else "cpu")
+        degf_clip_bundle = load_clip_risk_bundle(model_path=args.degf_clip_model_path, device=clip_device)
+    if args.degf_enable_sd_logit_intervention:
+        sd_feedback_pipe = load_sd_pipeline_for_feedback(device="cuda" if torch.cuda.is_available() else "cpu")
 
     timing_count = 0
     timing_total_sec_sum = 0.0
@@ -268,6 +292,7 @@ def main():
 
         image_pos = None
         image_neg = None
+        raw_image = None
 
         if args.use_ritual:
             # ==============================================
@@ -325,6 +350,27 @@ def main():
                 
             logger.info("[Diffusion] Generating description (use_diffusion=False for this step)")
             llm_t0 = time.perf_counter()
+            model._degf_runtime_context = {
+                "degf_risk_threshold": args.degf_risk_threshold,
+                "degf_risk_metric": args.degf_risk_metric,
+                "degf_clip_bundle": degf_clip_bundle,
+                "degf_clip_model_path": args.degf_clip_model_path,
+                "degf_clip_prompt_template": args.degf_clip_prompt_template,
+                "degf_clip_device": args.degf_clip_device,
+                "degf_enable_np_cache": args.degf_enable_np_cache,
+                "degf_np_cache_size": args.degf_np_cache_size,
+                "degf_debug_np_cache": args.degf_debug_np_cache,
+                "degf_tokenizer": tokenizer,
+                "degf_enable_sd_logit_intervention": False,
+                "degf_sd_lambda": args.degf_sd_lambda,
+                "degf_sd_topk": args.degf_sd_topk,
+                "degf_sd_timestep": args.degf_sd_timestep,
+                "degf_sd_unet_batch_size": args.degf_sd_unet_batch_size,
+                "degf_sd_seed": args.degf_sd_seed,
+                "degf_debug_sd_logit_intervention": args.degf_debug_sd_logit_intervention,
+                "degf_sd_pipe": sd_feedback_pipe,
+                "degf_raw_image": raw_image,
+            }
             with torch.inference_mode():
                 with torch.no_grad():
                     output_ids, _ = model.generate(
@@ -369,6 +415,9 @@ def main():
             raw_image_neg.save('image_neg.png')
             image_neg = image_processor.preprocess(raw_image_neg, return_tensor='pt')['pixel_values'][0]
             image_neg = torch.tensor(image_neg)
+
+        if args.degf_enable_sd_logit_intervention and raw_image is None:
+            raw_image = Image.open(image_path[0]).convert("RGB")
         
         
         # ==============================================
@@ -397,9 +446,30 @@ def main():
 
         logger.info(f"[VQA] use_diffusion={args.use_diffusion}")
         llm_t0 = time.perf_counter()
+        model._degf_runtime_context = {
+            "degf_risk_threshold": args.degf_risk_threshold,
+            "degf_risk_metric": args.degf_risk_metric,
+            "degf_clip_bundle": degf_clip_bundle,
+            "degf_clip_model_path": args.degf_clip_model_path,
+            "degf_clip_prompt_template": args.degf_clip_prompt_template,
+            "degf_clip_device": args.degf_clip_device,
+            "degf_enable_np_cache": args.degf_enable_np_cache,
+            "degf_np_cache_size": args.degf_np_cache_size,
+            "degf_debug_np_cache": args.degf_debug_np_cache,
+            "degf_tokenizer": tokenizer,
+            "degf_enable_sd_logit_intervention": args.degf_enable_sd_logit_intervention,
+            "degf_sd_lambda": args.degf_sd_lambda,
+            "degf_sd_topk": args.degf_sd_topk,
+            "degf_sd_timestep": args.degf_sd_timestep,
+            "degf_sd_unet_batch_size": args.degf_sd_unet_batch_size,
+            "degf_sd_seed": args.degf_sd_seed,
+            "degf_debug_sd_logit_intervention": args.degf_debug_sd_logit_intervention,
+            "degf_sd_pipe": sd_feedback_pipe,
+            "degf_raw_image": raw_image,
+        }
         with torch.inference_mode():
             with torch.no_grad():
-                output_ids, js_list = model.generate(
+                output_ids, risk_list = model.generate(
                     input_ids,
                     images=image.unsqueeze(0).half().cuda(),
                     images_pos=(image_pos.unsqueeze(0).half().cuda() if image_pos is not None else None),
@@ -430,7 +500,7 @@ def main():
             outputs = outputs[:-len(stop_str)]
         outputs = outputs.strip()
         pred_list = recorder(outputs, pred_list)
-        # js_list_first.append(js_list[0])
+        # risk_list_first.append(risk_list[0])
         logger.info(f"[VQA for ritual]")
         logger.info(f"V: {image_path}")
         logger.info(f"Q: {qs}")
@@ -440,8 +510,8 @@ def main():
             # print each token in a list
             output_list = [tokenizer.decode([token]) for token in output_ids[:, input_token_len:].tolist()[0]]
             printout = ""
-            for token, js in zip(output_list, js_list):
-                printout += f"{token}({js}) "
+            for token, risk in zip(output_list, risk_list):
+                printout += f"{token}({risk}) "
             logger.info(printout)
         if label == 1: logger.info(f"GT: Yes")
         elif label == 0: logger.info(f"GT: No")
@@ -483,7 +553,7 @@ def main():
         logger.info(f"="*50)
         np.save(f"{experiment_dir}/pred_list.npy", pred_list)
         np.save(f"{experiment_dir}/pred_list2.npy", pred_list2)
-        np.save(f"{experiment_dir}/js_list.npy", js_list_first)
+        np.save(f"{experiment_dir}/risk_list.npy", risk_list_first)
         np.save(f"{experiment_dir}/label_list.npy", label_list)
 
     if len(pred_list) != 0:
@@ -526,7 +596,7 @@ def main():
             logger.info(f"RITUAL Transformation: {pos_aug_counter}")
 
         np.save(f"{experiment_dir}/pred_list.npy", pred_list)
-        np.save(f"{experiment_dir}/js_list.npy", js_list_first)
+        np.save(f"{experiment_dir}/risk_list.npy", risk_list_first)
 
 if __name__ == "__main__":
     main()

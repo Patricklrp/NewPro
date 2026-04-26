@@ -336,7 +336,7 @@ def main():
             eta_m, eta_s = divmod(rem, 60)
             logger.info(
                 f"[Progress] {done}/{effective_total} ({done / effective_total * 100:.1f}%) | "
-                f"elapsed {elapsed:.1f}s | avg {avg_time:.2f}s/it | eta {eta_h:02d}:{eta_m:02d}:{eta_s:02d}"
+                f"elapsed {elapsed:.1f}s | avg {avg_time:.2f}s/it | ETA {eta_h:02d}:{eta_m:02d}:{eta_s:02d}"
             )
             last_log_time = now
 

@@ -1,0 +1,2 @@
+metric,auroc,auprc,best_f1,best_threshold,best_precision,best_recall,target_recall,precision_at_target_recall,achieved_recall_at_target,threshold_at_target_recall,non_hallucinated_ratio_at_target_recall,predicted_hallucinated_ratio_at_target_recall
+图文匹配度风险,0.7917985968833426,0.296399392941744,0.4634146341463415,0.7660070508718491,0.3392857142857143,0.7307692307692307,0.99,0.18081918081918083,0.9945054945054945,0.7155335247516632,0.19533762057877813,0.8046623794212219

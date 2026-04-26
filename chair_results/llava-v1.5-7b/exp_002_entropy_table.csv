@@ -1,0 +1,3 @@
+group,count,mean_entropy_bits,var_entropy_bits2
+hallucinated,15,6.97450986,8.19582881
+non_hallucinated,1516,6.04482636,6.89893692
